@@ -6,6 +6,14 @@ import { Map } from "lucide-react";
 import { PieChart as RChart, Pie, Tooltip, Legend, Cell, ResponsiveContainer } from "recharts";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
+import { supabase } from "./lib/supabaseClient";
+
+interface StatRow {
+  user: string;
+  edits: number;
+}
+
+const COLORS = ["#8884d8", "#82ca9d", "#ffc658", "#ff8042", "#8dd1e1", "#a4de6c", "#d0ed57", "#d066ff"];
 
 const saveSectionAsPdf = async (elemId: string, username: string) => {
   const elem = document.getElementById(elemId);
@@ -19,7 +27,7 @@ const saveSectionAsPdf = async (elemId: string, username: string) => {
     useCORS: true,
   });
 
-  const imgData = canvas.toDataURL("image/jpeg", 0.8); // use jpeg to keep size low
+  const imgData = canvas.toDataURL("image/jpeg", 0.8);
   const pdf = new jsPDF({
     orientation: "landscape",
     unit: "pt",
@@ -39,11 +47,6 @@ const saveSectionAsPdf = async (elemId: string, username: string) => {
   pdf.save(`${cleanUsername}_report.pdf`);
 };
 
-interface StatRow {
-  user: string;
-  edits: number;
-}
-
 export default function App() {
   const [username, setUsername] = useState("");
   const [userStats, setUserStats] = useState<StatRow[]>([]);
@@ -51,18 +54,19 @@ export default function App() {
     edits: number;
     days: number;
     editors: Record<string, number>;
-    csvUrl: string;
+    csvText: string;
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const COLORS = ["#8884d8", "#82ca9d", "#ffc658", "#ff8042", "#8dd1e1", "#a4de6c", "#d0ed57", "#d066ff"];
-
   useEffect(() => {
-    fetch("http://localhost:3001/api/users")
-      .then((r) => r.json())
-      .then((rows: StatRow[]) => setUserStats(rows))
-      .catch(() => setUserStats([]));
+    supabase
+      .from("users")
+      .select("*")
+      .then(({ data, error }) => {
+        if (error) setUserStats([]);
+        else setUserStats(data || []);
+      });
   }, []);
 
   const fetchChangesets = async (user: string) => {
@@ -75,16 +79,14 @@ export default function App() {
     let edits = 0;
     const daySet = new Set<string>();
     const editors: Record<string, number> = {};
-    const csvLines: string[] = [
+    const csvLines = [
       "id,created_at,closed_at,changes_count,min_lon,min_lat,max_lon,max_lat,editor,comment",
     ];
     let firstLoop = true;
 
     try {
       while (true) {
-        const url = `https://api.openstreetmap.org/api/0.6/changesets?display_name=${encodeURIComponent(
-          user
-        )}&time=${EPOCH},${windowEnd}&limit=100`;
+        const url = `https://api.openstreetmap.org/api/0.6/changesets?display_name=${encodeURIComponent(user)}&time=${EPOCH},${windowEnd}&limit=100`;
         const res = await fetch(url);
         if (res.status === 404) throw new Error("Wrong username");
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -143,20 +145,31 @@ export default function App() {
     }
 
     const csvText = csvLines.join("\n");
-    const csvUrl = `http://localhost:3001/changesets/${encodeURIComponent(user)}.csv`;
 
-    await fetch("http://localhost:3001/api/user", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: user, edits, csv: csvText }),
-    });
+    await supabase
+  .from("users")
+  .upsert({ user, edits }, { onConflict: 'user' });
 
-    fetch("http://localhost:3001/api/users")
-      .then((r) => r.json())
-      .then((rows: StatRow[]) => setUserStats(rows))
-      .catch(() => {});
+const { data, error } = await supabase.from("users").select("*");
+if (error) {
+  console.error("Error fetching updated user stats:", error.message);
+} else {
+  setUserStats(data || []);
+}
+console.log("Inserting user to Supabase:", user, edits);
 
-    setCurrentStats({ edits, days: daySet.size, editors, csvUrl });
+setCurrentStats({ edits, days: daySet.size, editors, csvText });
+setLoading(false);
+
+
+    supabase
+      .from("users")
+      .select("*")
+      .then(({ data, error }) => {
+        if (!error) setUserStats(data || []);
+      });
+
+    setCurrentStats({ edits, days: daySet.size, editors, csvText });
     setLoading(false);
   };
 
@@ -168,6 +181,17 @@ export default function App() {
   const editorData = currentStats
     ? Object.entries(currentStats.editors).map(([name, value]) => ({ name, value }))
     : [];
+
+  const triggerCsvDownload = () => {
+    if (!currentStats || !username) return;
+    const blob = new Blob([currentStats.csvText], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${username}_changesets.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center p-6 gap-6">
@@ -194,69 +218,61 @@ export default function App() {
 
           {currentStats && !error && (
             <>
-            <div id="user-report" className="bg-white p-6 rounded-lg shadow-md border border-gray-200 w-full">
-              <div className="grid grid-cols-2 gap-4 text-lg font-medium">
-                <div>
-                  Total edits: <span className="font-bold">{currentStats.edits.toLocaleString()}</span>
+              <div id="user-report" className="bg-white p-6 rounded-lg shadow-md border border-gray-200 w-full">
+                <div className="grid grid-cols-2 gap-4 text-lg font-medium">
+                  <div>
+                    Total edits: <span className="font-bold">{currentStats.edits.toLocaleString()}</span>
+                  </div>
+                  <div>
+                    Mapping days: <span className="font-bold">{currentStats.days}</span>
+                  </div>
                 </div>
-                <div>
-                  Mapping days: <span className="font-bold">{currentStats.days}</span>
-                </div>
-              </div>
-              <div className="grid md:grid-cols-2 gap-6 items-start">
-                <div className="w-full h-64">
-                  <ResponsiveContainer>
-                    <RChart>
-                      <Pie data={editorData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80}>
-                        {editorData.map((_, i) => (
-                          <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                      <Legend />
-                    </RChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="border-b font-medium">
-                        <th className="py-1 px-2 text-left">Editor</th>
-                        <th className="py-1 px-2 text-right">Count</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {editorData.map((r) => (
-                        <tr key={r.name} className="border-b last:border-0">
-                          <td className="py-1 px-2">{r.name}</td>
-                          <td className="py-1 px-2 text-right font-semibold">
-                            {r.value.toLocaleString()}
-                          </td>
+                <div className="grid md:grid-cols-2 gap-6 items-start">
+                  <div className="w-full h-64">
+                    <ResponsiveContainer>
+                      <RChart>
+                        <Pie data={editorData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80}>
+                          {editorData.map((_, i) => (
+                            <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip />
+                        <Legend />
+                      </RChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="border-b font-medium">
+                          <th className="py-1 px-2 text-left">Editor</th>
+                          <th className="py-1 px-2 text-right">Count</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {editorData.map((r) => (
+                          <tr key={r.name} className="border-b last:border-0">
+                            <td className="py-1 px-2">{r.name}</td>
+                            <td className="py-1 px-2 text-right font-semibold">{r.value.toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
-              </div>
-              <a
-                href={currentStats.csvUrl}
-                download={`${username}_changesets.csv`}
-                className="inline-flex items-center gap-1 text-blue-600 hover:underline"
-              >
+              <Button onClick={triggerCsvDownload} className="mt-4 self-start">
                 Download CSV
-              </a>
-              <Button
-      onClick={() => saveSectionAsPdf("user-report", `${username}`)}
-      className="mt-4 self-start">
-      Download my Report
-    </Button>
+              </Button>
+              <Button onClick={() => saveSectionAsPdf("user-report", username)} className="mt-2 self-start">
+                Download my Report (PDF)
+              </Button>
             </>
           )}
 
           {userStats.length > 0 && (
             <div className="mt-8">
-              <h2 className="text-xl font-semibold mb-2">Fetched Users (persistent)</h2>
+              <h2 className="text-xl font-semibold mb-2">Fetched Users (Dashboard)</h2>
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead>
@@ -269,21 +285,12 @@ export default function App() {
                     {userStats.map((u) => (
                       <tr key={u.user} className="border-b last:border-0">
                         <td className="py-1 px-2">{u.user}</td>
-                        <td className="py-1 px-2 text-right font-semibold">
-                          {u.edits.toLocaleString()}
-                        </td>
+                        <td className="py-1 px-2 text-right font-semibold">{u.edits.toLocaleString()}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              <a
-      href="http://localhost:3001/dashdownload"
-      download="dashboard.csv"
-      className="inline-flex items-center gap-1 text-blue-600 hover:underline mt-4"
-    >
-      Download Report
-    </a>
             </div>
           )}
         </CardContent>

@@ -12,13 +12,24 @@ app.use(express.json());
 
 const db = new sqlite3.Database("./changesets.db");
 
-db.run(`
-  CREATE TABLE IF NOT EXISTS stats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user TEXT UNIQUE,
-    edits INTEGER
-  )
-`);
+// /api/user.js (for Vercel or local Next.js API routes)
+import { supabase } from "../../lib/supabaseClient";
+
+export default async function handler(req, res) {
+  if (req.method === "POST") {
+    const { username, edits } = req.body;
+    const { error } = await supabase.from("users").upsert({ username, edits });
+    if (error) return res.status(500).json({ error: error.message });
+    return res.status(200).json({ success: true });
+  }
+
+  if (req.method === "GET") {
+    const { data, error } = await supabase.from("users").select("*");
+    if (error) return res.status(500).json({ error: error.message });
+    return res.status(200).json(data);
+  }
+}
+
 
 // POST /api/user — insert or update user data
 app.post("/api/user", (req, res) => {
@@ -29,7 +40,7 @@ app.post("/api/user", (req, res) => {
   }
 
   db.run(
-    `INSERT INTO stats (user, edits) VALUES (?, ?)
+    `INSERT INTO users (user, edits) VALUES (?, ?)
      ON CONFLICT(user) DO UPDATE SET edits = excluded.edits`,
     [username, edits],
     (err) => {
@@ -46,7 +57,7 @@ app.post("/api/user", (req, res) => {
 
 // GET /api/users — return all stored users
 app.get("/api/users", (req, res) => {
-  db.all("SELECT user, edits FROM stats ORDER BY edits DESC", [], (err, rows) => {
+  db.all("SELECT user, edits FROM users ORDER BY edits DESC", [], (err, rows) => {
     if (err) return res.status(500).json({ error: "Failed to fetch users" });
     res.json(rows);
   });
@@ -61,7 +72,7 @@ app.get("/changesets/:username.csv", (req, res) => {
 
 // GET /dashdownload — serve entire dashboard CSV
 app.get("/dashdownload", (req, res) => {
-  db.all("SELECT user, edits FROM stats ORDER BY edits DESC", [], (err, rows) => {
+  db.all("SELECT user, edits FROM users ORDER BY edits DESC", [], (err, rows) => {
     if (err) return res.status(500).send("Error generating dashboard");
 
     const csv = ["user,edits", ...rows.map((r) => `${r.user},${r.edits}`)].join("\n");
