@@ -71,38 +71,8 @@ export default function App() {
         if (!sets.length) break;
         let earliest = windowEnd;
         sets.forEach((cs) => {
-          const id = cs.getAttribute("id") || "";
           const created = cs.getAttribute("created_at") || "";
-          const closed = cs.getAttribute("closed_at") || "";
-          const changesCnt = cs.getAttribute("changes_count") || "0";
-          const minLon = cs.getAttribute("min_lon") || "";
-          const minLat = cs.getAttribute("min_lat") || "";
-          const maxLon = cs.getAttribute("max_lon") || "";
-          const maxLat = cs.getAttribute("max_lat") || "";
-
-          edits += parseInt(changesCnt, 10);
-          daySet.add(created.slice(0, 10));
-
-          const tag = Array.from(cs.getElementsByTagName("tag")).find((t) => t.getAttribute("k") === "created_by");
-          let editor = tag?.getAttribute("v") || "unknown";
-          editor = editor.split("/")[0].split(" ")[0];
-          editors[editor] = (editors[editor] || 0) + 1;
-
-          csvLines.push([
-            id,
-            created,
-            closed,
-            changesCnt,
-            minLon,
-            minLat,
-            maxLon,
-            maxLat,
-            editor,
-            "", // comment empty in this lightweight CSV
-          ].join(","));
-
-          if (created < earliest) earliest = created;
-        });
+          edits += parseInt(cs.getAttribute("changes_count") || "0", 10);
           daySet.add(created.slice(0, 10));
           const tag = Array.from(cs.getElementsByTagName("tag")).find((t) => t.getAttribute("k") === "created_by");
           let editor = tag?.getAttribute("v") || "unknown";
